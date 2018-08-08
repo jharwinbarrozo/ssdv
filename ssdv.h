@@ -33,7 +33,9 @@ extern "C" {
 
 /* Packet details */
 #define SSDV_PKT_SIZE         (0x100)
+#define SSDV_PKT_SIZE_DSLWP   (218)
 #define SSDV_PKT_SIZE_HEADER  (0x0F)
+#define SSDV_PKT_SIZE_HEADER_DSLWP (9)
 #define SSDV_PKT_SIZE_CRC     (0x04)
 #define SSDV_PKT_SIZE_RSCODES (0x20)
 
@@ -45,6 +47,7 @@ extern "C" {
 #define SSDV_TYPE_INVALID (0xFF)
 #define SSDV_TYPE_NORMAL  (0x00)
 #define SSDV_TYPE_NOFEC   (0x01)
+#define SSDV_TYPE_DSLWP   (0x02)
 
 typedef struct
 {
@@ -52,7 +55,9 @@ typedef struct
 	uint8_t type; /* 0 = Normal mode (224 byte packet + 32 bytes FEC),
 	                 1 = No-FEC mode (256 byte packet) */
 	uint16_t pkt_size_payload;
+        uint16_t pkt_size_header;
 	uint16_t pkt_size_crcdata;
+        uint16_t pkt_size;
 	
 	/* Image information */
 	uint16_t width;
@@ -158,7 +163,9 @@ extern char ssdv_dec_feed(ssdv_t *s, uint8_t *packet);
 extern char ssdv_dec_get_jpeg(ssdv_t *s, uint8_t **jpeg, size_t *length);
 
 extern char ssdv_dec_is_packet(uint8_t *packet, int *errors);
+extern char ssdv_dec_is_packet_dslwp(uint8_t *packet, int *errors);
 extern void ssdv_dec_header(ssdv_packet_info_t *info, uint8_t *packet);
+extern void ssdv_dec_header_dslwp(ssdv_packet_info_t *info, uint8_t *packet);
 
 #ifdef __cplusplus
 }
