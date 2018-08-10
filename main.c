@@ -37,7 +37,7 @@ void exit_usage()
 		"  -i Set the image ID (0-255).\n"
 		"  -q Set the JPEG quality level (0 to 7, defaults to 4).\n"
 		"  -v Print data for each packet decoded.\n"
-		"  -D DSLWP mode (only decoding implemented).\n"
+		"  -D DSLWP mode.\n"
 		"\n");
 	exit(-1);
 }

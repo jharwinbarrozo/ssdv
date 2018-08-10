@@ -22,6 +22,9 @@
 #include "ssdv.h"
 #include "rs8.h"
 
+#define CRC32_INITIAL_VALUE 0xFFFFFFFF
+#define CRC32_DSLWP_MAGIC_VALUE 0x4EE4FDE1
+
 /* Recognised JPEG markers */
 enum {
 	J_TEM = 0xFF01,
@@ -213,12 +216,12 @@ static void *dtblcpy(ssdv_t *s, const void *src, size_t n)
 	return(r);
 }
 
-static uint32_t crc32(void *data, size_t length)
+static uint32_t crc32(void *data, size_t length, uint32_t initial_value)
 {
 	uint32_t crc, x;
 	uint8_t i, *d;
 	
-	for(d = data, crc = 0xFFFFFFFF; length; length--)
+	for(d = data, crc = initial_value; length; length--)
 	{
 		x = (crc ^ *(d++)) & 0xFF;
 		for(i = 8; i > 0; i--)
@@ -657,7 +660,7 @@ static void ssdv_set_packet_conf(ssdv_t *s)
 		break;
 	case SSDV_TYPE_DSLWP:
 	        s->pkt_size_payload = SSDV_PKT_SIZE_DSLWP - SSDV_PKT_SIZE_HEADER_DSLWP - SSDV_PKT_SIZE_CRC;
-		s->pkt_size_crcdata = SSDV_PKT_SIZE_HEADER_DSLWP + s->pkt_size_payload - 1;
+		s->pkt_size_crcdata = SSDV_PKT_SIZE_HEADER_DSLWP + s->pkt_size_payload;
 		s->pkt_size_header = SSDV_PKT_SIZE_HEADER_DSLWP;
 		s->pkt_size = SSDV_PKT_SIZE_DSLWP;
 		break;
@@ -1049,6 +1052,7 @@ char ssdv_enc_get_packet(ssdv_t *s)
 				uint32_t x;
 				uint8_t i;
 				int image_id_offset = s->type == SSDV_TYPE_DSLWP ? 0 : 6;
+				int crc_offset = s->type == SSDV_TYPE_DSLWP ? 0 : 1;
 				
 				if(mcu_offset != 0xFF && mcu_offset >= s->pkt_size_payload)
 				{
@@ -1090,9 +1094,12 @@ char ssdv_enc_get_packet(ssdv_t *s)
 				if(s->out_len > 0) ssdv_memset_prng(s->outp, s->out_len);
 				
 				/* Calculate the CRC codes */
-				x = crc32(&s->out[1], s->pkt_size_crcdata);
+				x = crc32(&s->out[crc_offset],
+					  s->pkt_size_crcdata,
+					  s->type == SSDV_TYPE_DSLWP ?
+					  CRC32_DSLWP_MAGIC_VALUE : CRC32_INITIAL_VALUE);
 				
-				i = 1 + s->pkt_size_crcdata;
+				i = crc_offset + s->pkt_size_crcdata;
 				s->out[i++] = (x >> 24) & 0xFF;
 				s->out[i++] = (x >> 16) & 0xFF;
 				s->out[i++] = (x >> 8) & 0xFF;
@@ -1453,7 +1460,7 @@ char ssdv_dec_is_packet(uint8_t *packet, int *errors)
 		if(errors) *errors = 0;
 		
 		/* Test the checksum */
-		x = crc32(&pkt[1], pkt_size_crcdata);
+		x = crc32(&pkt[1], pkt_size_crcdata, CRC32_INITIAL_VALUE);
 		
 		i = 1 + pkt_size_crcdata;
 		if(x == (pkt[i + 3] | (pkt[i + 2] << 8) | (pkt[i + 1] << 16) | (pkt[i] << 24)))
@@ -1472,7 +1479,7 @@ char ssdv_dec_is_packet(uint8_t *packet, int *errors)
 		if(errors) *errors = 0;
 		
 		/* Test the checksum */
-		x = crc32(&pkt[1], pkt_size_crcdata);
+		x = crc32(&pkt[1], pkt_size_crcdata, CRC32_INITIAL_VALUE);
 		
 		i = 1 + pkt_size_crcdata;
 		if(x == (pkt[i + 3] | (pkt[i + 2] << 8) | (pkt[i + 1] << 16) | (pkt[i] << 24)))
@@ -1496,7 +1503,7 @@ char ssdv_dec_is_packet(uint8_t *packet, int *errors)
 		if(errors) *errors = i;
 		
 		/* Test the checksum */
-		x = crc32(&pkt[1], pkt_size_crcdata);
+		x = crc32(&pkt[1], pkt_size_crcdata, CRC32_INITIAL_VALUE);
 		
 		i = 1 + pkt_size_crcdata;
 		if(x == (pkt[i + 3] | (pkt[i + 2] << 8) | (pkt[i + 1] << 16) | (pkt[i] << 24)))
@@ -1543,19 +1550,18 @@ char ssdv_dec_is_packet_dslwp(uint8_t *packet, int *errors)
 
 	/* Test for a valid NOFEC packet */
 	pkt_size_payload = SSDV_PKT_SIZE_DSLWP - SSDV_PKT_SIZE_HEADER_DSLWP - SSDV_PKT_SIZE_CRC;
-	pkt_size_crcdata = SSDV_PKT_SIZE_HEADER_DSLWP + pkt_size_payload - 1;
+	pkt_size_crcdata = SSDV_PKT_SIZE_HEADER_DSLWP + pkt_size_payload;
 		
 	/* No FEC scan */
 	if(errors) *errors = 0;
 		
 	/* Test the checksum */
-	x = crc32(&pkt[1], pkt_size_crcdata);
+	x = crc32(pkt, pkt_size_crcdata, CRC32_DSLWP_MAGIC_VALUE);
 		
-	i = 1 + pkt_size_crcdata;
+	i = pkt_size_crcdata;
 	if(x != (pkt[i + 3] | (pkt[i + 2] << 8) | (pkt[i + 1] << 16) | (pkt[i] << 24)))
 	{
-	  fprintf(stderr, "CRC32 incorrect, but processing packet anyway\n");
-	  /*return(-1);*/
+	        return(-1);
 	}
 	
 	/* Sanity checks */
