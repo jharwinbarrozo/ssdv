@@ -34,8 +34,11 @@ extern "C" {
 /* Packet details */
 #define SSDV_PKT_SIZE         (0x100)
 #define SSDV_PKT_SIZE_DSLWP   (218)
+#define SSDV_PKT_SIZE_JY1SAT  (200)
+#define SSDV_MAX_PKT_SIZE     (SSDV_PKT_SIZE)
 #define SSDV_PKT_SIZE_HEADER  (0x0F)
 #define SSDV_PKT_SIZE_HEADER_DSLWP (9)
+#define SSDV_PKT_SIZE_HEADER_JY1SAT (11)
 #define SSDV_PKT_SIZE_CRC     (0x04)
 #define SSDV_PKT_SIZE_RSCODES (0x20)
 
@@ -47,8 +50,15 @@ extern "C" {
 #define SSDV_TYPE_INVALID (0xFF)
 #define SSDV_TYPE_NORMAL  (0x00)
 #define SSDV_TYPE_NOFEC   (0x01)
-#define SSDV_TYPE_DSLWP   (0x02)
+#define SSDV_TYPE_JY1SAT  (0x02)
+#define SSDV_TYPE_DSLWP   (0xFE)
 
+typedef enum {
+  ssdv_normal_mode,
+  ssdv_dslwp_mode,
+  ssdv_jy1sat_mode
+} ssdv_mode_t;
+  
 typedef struct
 {
 	/* Packet type configuration */
@@ -159,14 +169,15 @@ extern char ssdv_enc_feed(ssdv_t *s, uint8_t *buffer, size_t length);
 /* Decoding */
 extern char ssdv_dec_init(ssdv_t *s);
 extern char ssdv_dec_set_buffer(ssdv_t *s, uint8_t *buffer, size_t length);
-extern char ssdv_dec_feed(ssdv_t *s, uint8_t *packet);
+extern char ssdv_dec_feed(ssdv_t *s, uint8_t *packet, ssdv_mode_t mode);
 extern char ssdv_dec_get_jpeg(ssdv_t *s, uint8_t **jpeg, size_t *length);
 
-extern char ssdv_dec_is_packet(uint8_t *packet, int *errors);
-extern char ssdv_dec_is_packet_dslwp(uint8_t *packet, int *errors);
-extern void ssdv_dec_header(ssdv_packet_info_t *info, uint8_t *packet);
-extern void ssdv_dec_header_dslwp(ssdv_packet_info_t *info, uint8_t *packet);
+extern char ssdv_dec_is_packet(uint8_t *packet, int *errors, ssdv_mode_t mode);
+extern void ssdv_dec_header(ssdv_packet_info_t *info, uint8_t *packet, ssdv_mode_t mode);
 
+extern int ssdv_pkt_size(ssdv_mode_t mode);
+extern int ssdv_pkt_size_header(ssdv_mode_t mode);
+  
 #ifdef __cplusplus
 }
 #endif

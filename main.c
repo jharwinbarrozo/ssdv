@@ -38,6 +38,7 @@ void exit_usage()
 		"  -q Set the JPEG quality level (0 to 7, defaults to 4).\n"
 		"  -v Print data for each packet decoded.\n"
 		"  -D DSLWP mode.\n"
+		"  -J JY1SAT mode.\n"
 		"\n");
 	exit(-1);
 }
@@ -51,7 +52,7 @@ int main(int argc, char *argv[])
 	char type = SSDV_TYPE_NORMAL;
 	int droptest = 0;
 	int verbose = 0;
-	int dslwp_mode = 0;
+	ssdv_mode_t mode = ssdv_normal_mode;
 	int errors;
 	char callsign[7];
 	uint8_t image_id = 0;
@@ -64,7 +65,7 @@ int main(int argc, char *argv[])
 	callsign[0] = '\0';
 	
 	opterr = 0;
-	while((c = getopt(argc, argv, "ednc:i:q:t:vD")) != -1)
+	while((c = getopt(argc, argv, "ednc:i:q:t:vDJ")) != -1)
 	{
 		switch(c)
 		{
@@ -80,7 +81,14 @@ int main(int argc, char *argv[])
 		case 'q': quality = atoi(optarg); break;
 		case 't': droptest = atoi(optarg); break;
 		case 'v': verbose = 1; break;
-		case 'D': dslwp_mode = 1; break;
+		case 'D':
+			if (mode != ssdv_normal_mode) exit_usage();
+			mode = ssdv_dslwp_mode;
+			break;
+		case 'J':
+			if (mode != ssdv_normal_mode) exit_usage();
+			mode = ssdv_jy1sat_mode;
+			break;
 		case '?': exit_usage();
 		}
 	}
@@ -123,34 +131,25 @@ int main(int argc, char *argv[])
 		
 		ssdv_dec_init(&ssdv);
 
-		/* Set DSLWP mode if necessary */
-		if (dslwp_mode) ssdv.type = SSDV_TYPE_DSLWP;
-		
 		jpeg_length = 1024 * 1024 * 4;
 		jpeg = malloc(jpeg_length);
 		ssdv_dec_set_buffer(&ssdv, jpeg, jpeg_length);
 		
 		i = 0;
-		while(fread(pkt, 1, dslwp_mode ? SSDV_PKT_SIZE_DSLWP : SSDV_PKT_SIZE, fin) > 0)
+		while(fread(pkt, 1, ssdv_pkt_size(mode), fin) > 0)
 		{
 			/* Drop % of packets */
 			if(droptest && (rand() / (RAND_MAX / 100) < droptest)) continue;
 			
 			/* Test the packet is valid */
-			if(!dslwp_mode && ssdv_dec_is_packet(pkt, &errors) != 0) continue;
-			if(dslwp_mode && ssdv_dec_is_packet_dslwp(pkt, &errors) != 0) continue;
+			if(ssdv_dec_is_packet(pkt, &errors, mode) != 0) continue;
 			
 			if(verbose)
 			{
 				ssdv_packet_info_t p;
 
-				if (dslwp_mode) {
-				  ssdv_dec_header_dslwp(&p, pkt);
-				  strcpy(p.callsign_s, "DSLWP");
-				}
-				else {
-				  ssdv_dec_header(&p, pkt);
-				}
+				ssdv_dec_header(&p, pkt, mode);
+				
 				fprintf(stderr, "Decoded image packet. Callsign: %s, Image ID: %d, Resolution: %dx%d, Packet ID: %d (%d errors corrected)\n"
 				                ">> Type: %d, Quality: %d, EOI: %d, MCU Mode: %d, MCU Offset: %d, MCU ID: %d/%d\n",
 					p.callsign_s,
@@ -170,7 +169,7 @@ int main(int argc, char *argv[])
 			}
 			
 			/* Feed it to the decoder */
-			ssdv_dec_feed(&ssdv, pkt);
+			ssdv_dec_feed(&ssdv, pkt, mode);
 			i++;
 		}
 		
@@ -183,7 +182,9 @@ int main(int argc, char *argv[])
 		break;
 	
 	case 1: /* Encode */
-	        ssdv_enc_init(&ssdv, dslwp_mode ? SSDV_TYPE_DSLWP : type, callsign, image_id, quality);
+	        if (mode == ssdv_dslwp_mode) type = SSDV_TYPE_DSLWP;
+	        else if (mode == ssdv_jy1sat_mode) type = SSDV_TYPE_JY1SAT;
+	        ssdv_enc_init(&ssdv, type, callsign, image_id, quality);
 		ssdv_enc_set_buffer(&ssdv, pkt);
 		
 		i = 0;
@@ -213,7 +214,7 @@ int main(int argc, char *argv[])
 				return(-1);
 			}
 			
-			fwrite(pkt, 1, dslwp_mode ? SSDV_PKT_SIZE_DSLWP : SSDV_PKT_SIZE, fout);
+			fwrite(pkt, 1, ssdv_pkt_size(mode), fout);
 			i++;
 		}
 		

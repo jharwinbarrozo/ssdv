@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 #include "ssdv.h"
 #include "rs8.h"
 
@@ -664,6 +665,12 @@ static void ssdv_set_packet_conf(ssdv_t *s)
 		s->pkt_size_header = SSDV_PKT_SIZE_HEADER_DSLWP;
 		s->pkt_size = SSDV_PKT_SIZE_DSLWP;
 		break;
+	case SSDV_TYPE_JY1SAT:
+	        s->pkt_size_payload = SSDV_PKT_SIZE_JY1SAT - SSDV_PKT_SIZE_HEADER_JY1SAT;
+		s->pkt_size_crcdata = 0;
+		s->pkt_size_header = SSDV_PKT_SIZE_HEADER_JY1SAT;
+		s->pkt_size = SSDV_PKT_SIZE_JY1SAT;
+		break;
 	}
 }
 
@@ -1051,8 +1058,22 @@ char ssdv_enc_get_packet(ssdv_t *s)
 				uint8_t mcu_offset = s->packet_mcu_offset;
 				uint32_t x;
 				uint8_t i;
-				int image_id_offset = s->type == SSDV_TYPE_DSLWP ? 0 : 6;
-				int crc_offset = s->type == SSDV_TYPE_DSLWP ? 0 : 1;
+				int image_id_offset;
+				int crc_offset = 0;
+
+				switch (s->type) {
+				case SSDV_TYPE_DSLWP:
+					image_id_offset = 0;
+					crc_offset = 0;
+					break;
+				case SSDV_TYPE_JY1SAT:
+					image_id_offset = 2;
+					break;
+				default:
+					image_id_offset = 6;
+					crc_offset = 1;
+					break;
+				}
 				
 				if(mcu_offset != 0xFF && mcu_offset >= s->pkt_size_payload)
 				{
@@ -1069,13 +1090,17 @@ char ssdv_enc_get_packet(ssdv_t *s)
 				}
 				
 				/* A packet is ready, create the headers */
-				if (s->type != SSDV_TYPE_DSLWP) {
+				if(s->type != SSDV_TYPE_DSLWP)
+				{
 				        s->out[0]   = 0x55;                /* Sync */
 					s->out[1]   = 0x66 + s->type;      /* Type */
-					s->out[2]   = s->callsign >> 24;
-					s->out[3]   = s->callsign >> 16;
-					s->out[4]   = s->callsign >> 8;
-					s->out[5]   = s->callsign;
+					if (s->type != SSDV_TYPE_JY1SAT)
+					{
+						s->out[2]   = s->callsign >> 24;
+						s->out[3]   = s->callsign >> 16;
+						s->out[4]   = s->callsign >> 8;
+						s->out[5]   = s->callsign;
+					}
 				}
 				s->out[image_id_offset] = s->image_id;         /* Image ID */
 				s->out[image_id_offset + 1] = s->packet_id >> 8;   /* Packet ID MSB */
@@ -1092,18 +1117,21 @@ char ssdv_enc_get_packet(ssdv_t *s)
 				
 				/* Fill any remaining bytes with noise */
 				if(s->out_len > 0) ssdv_memset_prng(s->outp, s->out_len);
-				
-				/* Calculate the CRC codes */
-				x = crc32(&s->out[crc_offset],
-					  s->pkt_size_crcdata,
-					  s->type == SSDV_TYPE_DSLWP ?
-					  CRC32_DSLWP_MAGIC_VALUE : CRC32_INITIAL_VALUE);
-				
-				i = crc_offset + s->pkt_size_crcdata;
-				s->out[i++] = (x >> 24) & 0xFF;
-				s->out[i++] = (x >> 16) & 0xFF;
-				s->out[i++] = (x >> 8) & 0xFF;
-				s->out[i++] = x & 0xFF;
+
+				if(s->type != SSDV_TYPE_JY1SAT)
+				{
+					/* Calculate the CRC codes */
+					x = crc32(&s->out[crc_offset],
+						  s->pkt_size_crcdata,
+						  s->type == SSDV_TYPE_DSLWP ?
+						  CRC32_DSLWP_MAGIC_VALUE : CRC32_INITIAL_VALUE);
+					
+					i = crc_offset + s->pkt_size_crcdata;
+					s->out[i++] = (x >> 24) & 0xFF;
+					s->out[i++] = (x >> 16) & 0xFF;
+					s->out[i++] = (x >> 8) & 0xFF;
+					s->out[i++] = x & 0xFF;
+				}
 				
 				/* Generate the RS codes */
 				if(s->type == SSDV_TYPE_NORMAL)
@@ -1267,12 +1295,35 @@ char ssdv_dec_set_buffer(ssdv_t *s, uint8_t *buffer, size_t length)
 	return(SSDV_OK);
 }
 
-char ssdv_dec_feed(ssdv_t *s, uint8_t *packet)
+char ssdv_dec_feed(ssdv_t *s, uint8_t *packet, ssdv_mode_t mode)
 {
 	int i = 0, r;
 	uint8_t b;
 	uint16_t packet_id;
-	int image_id_offset = s->type == SSDV_TYPE_DSLWP ? 0 : 6;
+	int image_id_offset;
+
+	switch (mode) {
+	case ssdv_dslwp_mode:
+		s->type = SSDV_TYPE_DSLWP;
+		break;
+	case ssdv_jy1sat_mode:
+		s->type = SSDV_TYPE_JY1SAT;
+		break;
+	default:
+		break;
+	}
+
+	switch (s->type) {
+	case SSDV_TYPE_DSLWP:
+		image_id_offset = 0;
+		break;
+	case SSDV_TYPE_JY1SAT:
+		image_id_offset = 2;
+		break;
+	default:
+		image_id_offset = 6;
+		break;
+	}
 	
 	/* Read the packet header */
 	packet_id            = (packet[image_id_offset + 1] << 8) | packet[image_id_offset + 2];
@@ -1292,12 +1343,17 @@ char ssdv_dec_feed(ssdv_t *s, uint8_t *packet)
 		char callsign[SSDV_MAX_CALLSIGN + 1];
 		
 		/* Read the fixed headers from the packet */
-		if (s->type != SSDV_TYPE_DSLWP) {
-		  s->type      = packet[1] - 0x66;
-		  s->callsign  = (packet[2] << 24) | (packet[3] << 16) | (packet[4] << 8) | packet[5];
-		}
-		else {
-		  s->callsign = encode_callsign("DSLWP");
+		switch (s->type) {
+		case SSDV_TYPE_DSLWP:
+			s->callsign = encode_callsign("DSLWP");
+			break;
+		case SSDV_TYPE_JY1SAT:
+			s->callsign = encode_callsign("JY1SAT");
+			break;
+		default:
+			s->type      = packet[1] - 0x66;
+			s->callsign  = (packet[2] << 24) | (packet[3] << 16) | (packet[4] << 8) | packet[5];
+			break;
 		}
 		
 		s->image_id  = packet[image_id_offset];
@@ -1434,42 +1490,54 @@ char ssdv_dec_get_jpeg(ssdv_t *s, uint8_t **jpeg, size_t *length)
 	return(SSDV_OK);
 }
 
-char ssdv_dec_is_packet(uint8_t *packet, int *errors)
+char ssdv_dec_is_packet(uint8_t *packet, int *errors, ssdv_mode_t mode)
 {
-	uint8_t pkt[SSDV_PKT_SIZE];
+	uint8_t pkt[SSDV_MAX_PKT_SIZE];
 	uint8_t type;
 	uint16_t pkt_size_payload;
 	uint16_t pkt_size_crcdata;
+	uint16_t pkt_offset = 0;
 	ssdv_packet_info_t p;
 	uint32_t x;
 	int i;
 	
 	/* Testing is destructive, work on a copy */
-	memcpy(pkt, packet, SSDV_PKT_SIZE);
-	pkt[0] = 0x55;
-	
-	type = SSDV_TYPE_INVALID;
-	
-	if(pkt[1] == 0x66 + SSDV_TYPE_NOFEC)
+	memcpy(pkt, packet, ssdv_pkt_size(mode));
+
+	if(mode == ssdv_normal_mode || mode == ssdv_jy1sat_mode)
+	{
+		pkt[0] = 0x55;
+		pkt_offset = 1;
+	}
+
+	type = SSDV_TYPE_INVALID; /* Only used for ssdv_normal_mode */
+
+	if(mode == ssdv_jy1sat_mode)
+	{
+		pkt_size_payload = ssdv_pkt_size(mode) - ssdv_pkt_size_header(mode);
+		type = SSDV_TYPE_JY1SAT;
+	}		
+	else if(mode == ssdv_dslwp_mode || (mode == ssdv_normal_mode && pkt[1] == 0x66 + SSDV_TYPE_NOFEC))
 	{
 		/* Test for a valid NOFEC packet */
-		pkt_size_payload = SSDV_PKT_SIZE - SSDV_PKT_SIZE_HEADER - SSDV_PKT_SIZE_CRC;
-		pkt_size_crcdata = SSDV_PKT_SIZE_HEADER + pkt_size_payload - 1;
+		pkt_size_payload = ssdv_pkt_size(mode) - ssdv_pkt_size_header(mode) - SSDV_PKT_SIZE_CRC;
+		pkt_size_crcdata = ssdv_pkt_size_header(mode) + pkt_size_payload - pkt_offset;
 		
 		/* No FEC scan */
 		if(errors) *errors = 0;
 		
 		/* Test the checksum */
-		x = crc32(&pkt[1], pkt_size_crcdata, CRC32_INITIAL_VALUE);
+		x = crc32(&pkt[pkt_offset], pkt_size_crcdata,
+			  mode == ssdv_dslwp_mode ? CRC32_DSLWP_MAGIC_VALUE : CRC32_INITIAL_VALUE);
 		
-		i = 1 + pkt_size_crcdata;
+		i = pkt_offset + pkt_size_crcdata;
 		if(x == (pkt[i + 3] | (pkt[i + 2] << 8) | (pkt[i + 1] << 16) | (pkt[i] << 24)))
 		{
 			/* Valid, set the type and continue */
-			type = SSDV_TYPE_NOFEC;
+			type = mode == ssdv_dslwp_mode ? SSDV_TYPE_DSLWP : SSDV_TYPE_NOFEC;
 		}
 	}
-	else if(pkt[1] == 0x66 + SSDV_TYPE_NORMAL)
+	else if(mode == ssdv_normal_mode && pkt[1] == 0x66 + SSDV_TYPE_NORMAL)
 	{
 		/* Test for a valid NORMAL packet */
 		pkt_size_payload = SSDV_PKT_SIZE - SSDV_PKT_SIZE_HEADER - SSDV_PKT_SIZE_CRC - SSDV_PKT_SIZE_RSCODES;
@@ -1489,7 +1557,7 @@ char ssdv_dec_is_packet(uint8_t *packet, int *errors)
 		}
 	}
 	
-	if(type == SSDV_TYPE_INVALID)
+	if(mode == ssdv_normal_mode && type == SSDV_TYPE_INVALID)
 	{
 		/* Test for a valid NORMAL packet with correctable errors */
 		pkt_size_payload = SSDV_PKT_SIZE - SSDV_PKT_SIZE_HEADER - SSDV_PKT_SIZE_CRC - SSDV_PKT_SIZE_RSCODES;
@@ -1520,7 +1588,7 @@ char ssdv_dec_is_packet(uint8_t *packet, int *errors)
 	}
 	
 	/* Sanity checks */
-	ssdv_dec_header(&p, pkt);
+	ssdv_dec_header(&p, pkt, mode);
 	
 	if(p.type != type) return(-1);
 	if(p.width == 0 || p.height == 0) return(-1);
@@ -1531,66 +1599,47 @@ char ssdv_dec_is_packet(uint8_t *packet, int *errors)
 	}
 	
 	/* Appears to be a valid packet! Copy it back */
-	memcpy(packet, pkt, SSDV_PKT_SIZE);
+	memcpy(packet, pkt, ssdv_pkt_size(mode));
 	
 	return(0);
 }
 
-char ssdv_dec_is_packet_dslwp(uint8_t *packet, int *errors)
+void ssdv_dec_header(ssdv_packet_info_t *info, uint8_t *packet, ssdv_mode_t mode)
 {
-	uint8_t pkt[SSDV_PKT_SIZE_DSLWP];
-	uint16_t pkt_size_payload;
-	uint16_t pkt_size_crcdata;
-	ssdv_packet_info_t p;
-	uint32_t x;
-	int i;
-	
-	/* Testing is destructive, work on a copy */
-	memcpy(pkt, packet, SSDV_PKT_SIZE_DSLWP);
-
-	/* Test for a valid NOFEC packet */
-	pkt_size_payload = SSDV_PKT_SIZE_DSLWP - SSDV_PKT_SIZE_HEADER_DSLWP - SSDV_PKT_SIZE_CRC;
-	pkt_size_crcdata = SSDV_PKT_SIZE_HEADER_DSLWP + pkt_size_payload;
-		
-	/* No FEC scan */
-	if(errors) *errors = 0;
-		
-	/* Test the checksum */
-	x = crc32(pkt, pkt_size_crcdata, CRC32_DSLWP_MAGIC_VALUE);
-		
-	i = pkt_size_crcdata;
-	if(x != (pkt[i + 3] | (pkt[i + 2] << 8) | (pkt[i + 1] << 16) | (pkt[i] << 24)))
+	if(mode == ssdv_normal_mode || mode == ssdv_jy1sat_mode)
 	{
-	        return(-1);
+		info->type       = packet[1] - 0x66;
+	}
+	else if(mode == ssdv_dslwp_mode)
+	{
+		info->type = SSDV_TYPE_DSLWP;
 	}
 	
-	/* Sanity checks */
-	ssdv_dec_header_dslwp(&p, pkt);
-	
-	if(p.width == 0 || p.height == 0) return(-1);
-	if(p.mcu_id != 0xFFFF)
+	if(mode == ssdv_normal_mode)
 	{
-		if(p.mcu_id >= p.mcu_count) return(-1);
-		if(p.mcu_offset >= pkt_size_payload) return(-1);
+		info->callsign   = (packet[2] << 24) | (packet[3] << 16) | (packet[4] << 8) | packet[5];
+		decode_callsign(info->callsign_s, info->callsign);
+		/* The rest of the header coincides with a DSLWP packet header */
+		packet += 6;
 	}
-	
-	/* Appears to be a valid packet! Copy it back */
-	memcpy(packet, pkt, SSDV_PKT_SIZE_DSLWP);
-	
-	return(0);
-}
-
-void ssdv_dec_header(ssdv_packet_info_t *info, uint8_t *packet)
-{
-	info->type       = packet[1] - 0x66;
-	info->callsign   = (packet[2] << 24) | (packet[3] << 16) | (packet[4] << 8) | packet[5];
-	decode_callsign(info->callsign_s, info->callsign);
-	/* The rest of the header coincides with a DSLWP packet header */
-	ssdv_dec_header_dslwp(info, packet + 6);
-}
-
-void ssdv_dec_header_dslwp(ssdv_packet_info_t *info, uint8_t *packet)
-{
+	else if (mode == ssdv_jy1sat_mode)
+	{
+		strcpy(info->callsign_s, "JY1SAT");
+		info->callsign = encode_callsign(info->callsign_s);
+		/* The rest of the header coincides with a DSLWP packet header */
+		packet += 2;
+	}
+	else if (mode == ssdv_dslwp_mode)
+	{
+		strcpy(info->callsign_s, "DSLWP");
+		info->callsign = encode_callsign(info->callsign_s);
+	}
+	else
+	{
+		/* Incorrect mode */
+		abort();
+	}
+		
 	info->image_id   = packet[0];
 	info->packet_id  = (packet[1] << 8) | packet[2];
 	info->width      = packet[3] << 4;
@@ -1605,6 +1654,35 @@ void ssdv_dec_header_dslwp(ssdv_packet_info_t *info, uint8_t *packet)
 	else if(info->mcu_mode == 3) info->mcu_count *= 4;
 }
 
+int ssdv_pkt_size(ssdv_mode_t mode) {
+	switch (mode) {
+	case ssdv_normal_mode:
+		return SSDV_PKT_SIZE;
+	case ssdv_dslwp_mode:
+		return SSDV_PKT_SIZE_DSLWP;
+	case ssdv_jy1sat_mode:
+		return SSDV_PKT_SIZE_JY1SAT;
+	default:
+		abort();
+	}
+
+	return 0;
+}
+
+int ssdv_pkt_size_header(ssdv_mode_t mode) {
+	switch (mode) {
+	case ssdv_normal_mode:
+		return SSDV_PKT_SIZE_HEADER;
+	case ssdv_dslwp_mode:
+		return SSDV_PKT_SIZE_HEADER_DSLWP;
+	case ssdv_jy1sat_mode:
+		return SSDV_PKT_SIZE_HEADER_JY1SAT;
+	default:
+		abort();
+	}
+
+	return 0;
+}
 
 /*****************************************************************************/
 
