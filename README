@@ -32,7 +32,9 @@ Only JPEG files are supported, with the following limitations:
 
 INSTALLING
 
+cd ssdv
 make
+sudo make install
 
 TODO
 
